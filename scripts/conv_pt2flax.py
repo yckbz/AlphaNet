@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import sys
 import logging
 import numpy as np
 import jax
@@ -11,6 +12,14 @@ import re
 from collections import defaultdict 
 from typing import Dict, List, Any, Tuple, Union 
 import json
+
+# Ensure local script helpers and the repository package are imported first.
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(SCRIPT_DIR)
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
 # --- Dummy classes and data for standalone execution ---
 from utils import process_positions_and_edges

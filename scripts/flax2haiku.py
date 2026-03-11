@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import sys
 import logging
 import numpy as np
 import jax
@@ -13,6 +14,14 @@ import pickle
 from dataclasses import dataclass
 import sys
 import json
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(SCRIPT_DIR)
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
 from alphanet.models.alpha_flax import AlphaNet_flax as AlphaNet_flax
 from alphanet.models.alpha_haiku import AlphaNet_hiku as AlphaNet_hiku
 
