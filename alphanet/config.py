@@ -2,13 +2,12 @@
 
 import subprocess
 import json
-import torch
 from typing import Literal, Dict, Optional
 from pydantic_settings import BaseSettings
 
 try:
     VERSION = (
-        subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip()
+        subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL).decode().strip()
     )
 except Exception:
     VERSION = "NA"
@@ -86,7 +85,7 @@ class AlphaConfig(BaseSettings):
     has_norm_after_flag: bool = False
     reduce_mode: str = "sum"
     zbl: bool = False
-    device: torch.device = torch.device('cuda') if torch.cuda.is_available() else torch.device("cpu")
+    device: str = "cuda"
 
     
 

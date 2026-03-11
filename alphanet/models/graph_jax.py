@@ -17,6 +17,8 @@ class GraphData(NamedTuple):
     cell_offsets: Optional[jnp.ndarray] = None
     displacement: Optional[jnp.ndarray] = None
     pbc: Optional[jnp.ndarray] = None
+    atom_mask: Optional[jnp.ndarray] = None
+    edge_mask: Optional[jnp.ndarray] = None
 
 def segment_coo(src, index, dim_size):
     return ops.segment_sum(src, index, indices_are_sorted=True, num_segments=dim_size)
@@ -202,27 +204,39 @@ def get_pbc_distances(
     edge_index: jnp.ndarray,
     cell: jnp.ndarray,
     cell_offsets: jnp.ndarray,
+    edge_mask: Optional[jnp.ndarray],
+    cutoff: float,
     precision: jnp.ndarray.dtype,
 ) -> dict:
     row = edge_index[0]
     col = edge_index[1]
-    precision= jnp.float32
     distance_vectors = pos[row] - pos[col]
-    
+
     num_edges = row.shape[0]
-    neighbors = jnp.array([num_edges], dtype=jnp.int32)
-    cell_repeat = jnp.repeat(cell, neighbors, axis=0,total_repeat_length=num_edges)
+    if cell.shape[0] != 1:
+        raise ValueError("Padded JAX inference only supports a single graph per call.")
+    cell_repeat = jnp.broadcast_to(cell[0], (num_edges, 3, 3))
     offsets = jnp.einsum('ij,ijk->ik', cell_offsets.astype(precision), cell_repeat.astype(precision))
-    
+
+    if edge_mask is None:
+        edge_mask = jnp.ones((num_edges,), dtype=jnp.bool_)
+    else:
+        edge_mask = edge_mask.astype(jnp.bool_)
+
     distance_vectors += offsets
-    distances = jnp.linalg.norm(distance_vectors, axis=-1)
-    
-    
+    safe_fill = jnp.broadcast_to(
+        jnp.array([cutoff, 0.0, 0.0], dtype=precision),
+        distance_vectors.shape,
+    )
+    distance_vectors_for_norm = jnp.where(edge_mask[:, None], distance_vectors, safe_fill)
+    distances = jnp.linalg.norm(distance_vectors_for_norm, axis=-1)
+    distance_vectors = jnp.where(edge_mask[:, None], distance_vectors, 0.0)
+
     result = {
         "edge_index": edge_index,
         "distances": distances,
     }
-    
+
     result["distance_vec"] = distance_vectors
     return result
 
@@ -257,6 +271,8 @@ def process_positions_and_edges(
     shift: jnp.ndarray,
     cell: Optional[jnp.ndarray] = None,
     displacement: Optional[jnp.ndarray] = None,
+    atom_mask: Optional[jnp.ndarray] = None,
+    edge_mask: Optional[jnp.ndarray] = None,
     compute_stress: bool = False,
     compute_forces: bool = False,
     use_pbc: bool = True,
@@ -268,7 +284,23 @@ def process_positions_and_edges(
     precision = dtype
     pos = pos.astype(precision)
     z = z.astype(jnp.int32)
+    batch = batch.astype(jnp.int32)
+    edge_index = edge_index.astype(jnp.int32)
+    shift = shift.astype(jnp.int32)
+    if displacement is None:
+        displacement = jnp.zeros((1, 3, 3), dtype=precision)
+    if atom_mask is None:
+        atom_mask = jnp.ones((pos.shape[0],), dtype=jnp.bool_)
+    else:
+        atom_mask = atom_mask.astype(jnp.bool_)
+    if edge_mask is None:
+        edge_mask = jnp.ones((edge_index.shape[1],), dtype=jnp.bool_)
+    else:
+        edge_mask = edge_mask.astype(jnp.bool_)
+
     pos, cell = get_symmetric_displacement(pos, cell, 1, batch, displacement)
+    pos = jnp.where(atom_mask[:, None], pos, 0.0)
+    z = jnp.where(atom_mask, z, 0)
 
     cell = check_and_reshape_cell(cell)
     if use_pbc and cell is not None:
@@ -278,6 +310,8 @@ def process_positions_and_edges(
             edge_index,
             cell,
             shift,
+            edge_mask=edge_mask,
+            cutoff=cutoff,
             precision=precision
         )
         edge_index = out["edge_index"]
@@ -297,5 +331,7 @@ def process_positions_and_edges(
         edge_vec=vecs,
         cell=cell,
         cell_offsets=shift,
-        displacement=displacement
+        displacement=displacement,
+        atom_mask=atom_mask,
+        edge_mask=edge_mask,
     )

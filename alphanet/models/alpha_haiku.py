@@ -132,7 +132,10 @@ class EquiMessagePassing(hk.Module):
         self.inv_sqrt_3 = 1 / math.sqrt(3.0)
         self.inv_sqrt_h = 1 / math.sqrt(self.hidden_channels)
         self.kernel_transform = hk.Linear(self.chi1)
-    def __call__(self, x, vec, edge_index, edge_rbf, weight, edge_vector, rope=None):
+    def __call__(self, x, vec, edge_index, edge_rbf, weight, edge_vector, edge_mask, rope=None):
+        edge_mask = edge_mask.astype(x.dtype)
+        edge_mask_2d = edge_mask[:, None]
+        edge_mask_3d = edge_mask[:, None, None]
         if rope is not None:
             real, imag = jnp.split(x, 2, axis=-1)
             dy_pre = real + 1j * imag
@@ -142,14 +145,16 @@ class EquiMessagePassing(hk.Module):
         x = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(x)
         xh = self._build_x_proj()(x)
         
-        rbfh = hk.Linear(self.hidden_channels * 3)(edge_rbf)
-        weight_proj = self._build_dir_proj()(weight)
+        rbfh = hk.Linear(self.hidden_channels * 3)(edge_rbf) * edge_mask_2d
+        weight_proj = self._build_dir_proj()(weight) * edge_mask_2d
         rbfh = rbfh * weight_proj
         
         col, row = edge_index
         messages_x, messages_vec = self.message(
             xh[col], vec[col], rbfh, edge_vector
         )
+        messages_x = messages_x * edge_mask_2d
+        messages_vec = messages_vec * edge_mask_3d
         
         dx = jax.ops.segment_sum(messages_x, row, x.shape[0])
         dvec = jax.ops.segment_sum(messages_vec, row, vec.shape[0])
@@ -191,16 +196,17 @@ class EquiMessagePassing(hk.Module):
     def message(self, xh_j, vec_j, rbfh_ij, r_ij):
         x, xh2, xh3 = jnp.split(xh_j * rbfh_ij, 3, axis=-1)
         xh2 = xh2 * self.inv_sqrt_3
+        head_dim = self.hidden_channels_chi // self.head
         
         scale_out = hk.Linear(self.hidden_channels_chi * 2)(x)
         real, imag = jnp.split(scale_out, 2, axis=-1)
-        real = real.reshape(x.shape[0], self.head, -1)
-        imag = imag.reshape(x.shape[0], self.head, -1)
+        real = real.reshape(x.shape[0], self.head, head_dim)
+        imag = imag.reshape(x.shape[0], self.head, head_dim)
         
         phi = real + 1j * imag
         q = phi
         
-        a = jnp.ones((q.shape[0], 1, self.hidden_channels_chi // self.head), dtype=self.complex_type)
+        a = jnp.ones((q.shape[0], 1, head_dim), dtype=self.complex_type)
         
         kernel_real = hk.get_parameter(
             'kernel_real',
@@ -359,37 +365,46 @@ class AlphaNet_hiku(hk.Module):
         self.eps = jnp.finfo(jnp.float32).eps
     
     def __call__(self, data):
-      
-        if self.config.dtype == "64":
-            data = data.astype(jnp.float64)
-        
-      
-        pos = data.pos
-        batch = data.batch
-        z = data.z.astype(jnp.int64) 
-        edge_index = data.edge_index
-        dist = data.edge_attr
-        vecs = data.edge_vec
+        pos = data.pos.astype(self.dtype)
+        batch = data.batch.astype(jnp.int32)
+        z = data.z.astype(jnp.int32)
+        edge_index = data.edge_index.astype(jnp.int32)
+        dist = data.edge_attr.astype(self.dtype)
+        vecs = data.edge_vec.astype(self.dtype)
+        atom_mask = data.atom_mask
+        edge_mask = data.edge_mask
+        if atom_mask is None:
+            atom_mask = jnp.ones((z.shape[0],), dtype=self.dtype)
+        else:
+            atom_mask = atom_mask.astype(self.dtype)
+        if edge_mask is None:
+            edge_mask = jnp.ones((dist.shape[0],), dtype=self.dtype)
+        else:
+            edge_mask = edge_mask.astype(self.dtype)
+        atom_mask_2d = atom_mask[:, None]
+        atom_mask_3d = atom_mask[:, None, None]
+        edge_mask_2d = edge_mask[:, None]
 
         z_emb = self.z_emb(z)
         z_emb = self.z_emb_ln(z_emb)
+        z_emb = z_emb * atom_mask_2d
 
-        radial_emb = self.radial_emb(dist)
+        radial_emb = self.radial_emb(dist) * edge_mask_2d
         radial_hidden = self.radial_lin(radial_emb)
-        rbounds = 0.5 * (jnp.cos(dist * jnp.pi / self.config.cutoff) + 1.0) 
-        radial_hidden = radial_hidden * rbounds[..., None]
+        rbounds = 0.5 * (jnp.cos(jnp.clip(dist, 0.0, self.config.cutoff) * jnp.pi / self.config.cutoff) + 1.0)
+        radial_hidden = radial_hidden * rbounds[..., None] * edge_mask_2d
 
-        s = self.neighbor_emb(z, z_emb, edge_index, radial_hidden)
-        vec = jnp.zeros((s.shape[0], 3, s.shape[1]))
+        s = self.neighbor_emb(z, z_emb, edge_index, radial_hidden) * atom_mask_2d
+        vec = jnp.zeros((s.shape[0], 3, s.shape[1]), dtype=self.dtype)
 
         j = edge_index[0].astype(jnp.int32)  # source
         i = edge_index[1].astype(jnp.int32)  # target
 
-        edge_diff = vecs / (dist[:, None] + self.config.eps)  
+        edge_diff = jnp.where(edge_mask_2d > 0, vecs / (dist[:, None] + self.config.eps), 0.0)
 
-        ones = jnp.ones_like(pos[j], shape=(pos[j].shape[0], 1))  
+        ones = edge_mask_2d
         seg_count = jax.ops.segment_sum(ones, i, num_segments=pos.shape[0])
-        seg_sum = jax.ops.segment_sum(pos[j], i, num_segments=pos.shape[0])
+        seg_sum = jax.ops.segment_sum(pos[j] * edge_mask_2d, i, num_segments=pos.shape[0])
         seg_count = jnp.where(seg_count == 0, 1, seg_count)
         mean = seg_sum / seg_count
 
@@ -425,7 +440,7 @@ class AlphaNet_hiku(hk.Module):
             edge_weight, 
             radial_hidden, 
             radial_emb
-        ], axis=-1)
+        ], axis=-1) * edge_mask_2d
 
         kernel1 = hk.get_parameter(
             'kernel1',
@@ -468,12 +483,12 @@ class AlphaNet_hiku(hk.Module):
             fte = self.ftes[idx]
             
             if rope is None:
-                rope, ds, dvec = message_layer(s, vec, edge_index, radial_emb, edge_weight, edge_diff, None)
+                rope, ds, dvec = message_layer(s, vec, edge_index, radial_emb, edge_weight, edge_diff, edge_mask, None)
             else:
-                rope, ds, dvec = message_layer(s, vec, edge_index, radial_emb, edge_weight, edge_diff, rope)
+                rope, ds, dvec = message_layer(s, vec, edge_index, radial_emb, edge_weight, edge_diff, edge_mask, rope)
                 
-            s += ds
-            vec += dvec
+            s = (s + ds) * atom_mask_2d
+            vec = (vec + dvec) * atom_mask_3d
  
             kernel_real = kernels_real[idx]
             kernel_imag = kernels_imag[idx]
@@ -484,11 +499,12 @@ class AlphaNet_hiku(hk.Module):
                 s + 0j,  
                 quantum
             )
-            quantum = quantum / jnp.abs(quantum)
+            quantum_norm = jnp.abs(quantum)
+            quantum = quantum / jnp.where(quantum_norm > self.eps, quantum_norm, 1.0)
 
             ds, dvec = fte(s, vec)
-            s += ds
-            vec += dvec
+            s = (s + ds) * atom_mask_2d
+            vec = (vec + dvec) * atom_mask_3d
 
         quantum_real = jnp.real(quantum)
         quantum_imag = jnp.imag(quantum)
@@ -535,19 +551,19 @@ class AlphaNet_hiku(hk.Module):
             c = jnp.where(r_e >= r_cut, jnp.zeros_like(c), c)
 
             # apply taper to edge potential
-            V_edge = V_edge * c
+            V_edge = V_edge * c * edge_mask
             
             # aggregate edge energies to graph-level using jax.ops.segment_sum
             # Note: JAX uses segment_sum instead of scatter_add
             graph_idx = batch[i]  # map receiver node -> graph index (E,)
             V_graph = jax.ops.segment_sum(V_edge, graph_idx, num_segments=1) / 2.0
         if s.ndim == 2:
-            s = a_values[:, None] * s + b_values[:, None]
+            s = (a_values[:, None] * s + b_values[:, None]) * atom_mask_2d
         else:
-            s = a_values * s + b_values
+            s = (a_values * s + b_values) * atom_mask
             s = s[:, None]
         
-        s = jnp.sum(s)+V_graph#jax.ops.segment_sum(s, batch, num_segments=1)+ Vgraph
+        s = jnp.sum(s) + V_graph
         return jnp.squeeze(s)
         
 
