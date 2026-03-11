@@ -91,6 +91,8 @@ class MoleculeData:
     edge_index: jnp.ndarray
     edge_attr: jnp.ndarray
     edge_vec: jnp.ndarray
+    atom_mask: Optional[jnp.ndarray] = None
+    edge_mask: Optional[jnp.ndarray] = None
     shift: Optional[jnp.ndarray] = None
     cell: Optional[jnp.ndarray] = None
     # ... (__post_init__ omitted for brevity)
@@ -106,12 +108,16 @@ def create_dummy_data(num_atoms=10, num_edges=20, dtype=jnp.float32, periodic=Fa
     edge_index = jnp.array(edge_index)
     edge_attr = jnp.array(np.random.rand(num_edges), dtype=dtype)
     edge_vec = jnp.array(np.random.randn(num_edges, 3), dtype=dtype)
+    atom_mask = jnp.ones((num_atoms,), dtype=jnp.bool_)
+    edge_mask = jnp.ones((num_edges,), dtype=jnp.bool_)
     shift = jnp.array(np.random.randn(num_edges, 3), dtype=dtype) if periodic else None
     cell = jnp.array(np.random.randn(3, 3), dtype=dtype) if periodic else None
     
     return MoleculeData(
         pos=pos, batch=batch, z=z, edge_index=edge_index,
-        edge_attr=edge_attr, edge_vec=edge_vec, shift=shift, cell=cell
+        edge_attr=edge_attr, edge_vec=edge_vec,
+        atom_mask=atom_mask, edge_mask=edge_mask,
+        shift=shift, cell=cell
     )
 
 class FlaxToHaikuConverter:
