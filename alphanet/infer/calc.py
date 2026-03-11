@@ -27,10 +27,9 @@ class AlphaNetCalculator(Calculator):
             **kwargs: Additional arguments for the base ASE Calculator.
         """
         Calculator.__init__(self, **kwargs)
-        
-        # --- Model Loading ---
         if precision == "64":
-           config.dtype = '64'
+            config.dtype = '64'
+        # --- Model Loading ---
         if ckpt_path.endswith('ckpt'):
           self.model = AlphaNetWrapper(config).to(torch.device(device))
           # Load state dict, ignoring mismatches if any
@@ -44,7 +43,7 @@ class AlphaNetCalculator(Calculator):
         self.precision = torch.float32 if precision == "32" else torch.float64
         
         if precision == "64":
-          self.model.double()
+         self.model.double()
         
         self.model.eval() # Set model to evaluation mode
         self.model.to(self.device)
@@ -71,7 +70,7 @@ class AlphaNetCalculator(Calculator):
             calc_atoms = self.atoms.copy()
             # Add 20 Å of vacuum padding around the molecule
             padding = 20.0
-            new_cell_dims = calc_atoms.get_positions().ptp(axis=0) + padding
+            new_cell_dims = np.ptp(calc_atoms.get_positions(), axis=0) + padding
             calc_atoms.set_cell(np.diag(new_cell_dims))
             calc_atoms.center()
             calc_atoms.pbc = True # Treat it as periodic now
@@ -79,36 +78,25 @@ class AlphaNetCalculator(Calculator):
             calc_atoms = self.atoms
 
         # --- Prepare Tensors for the Model ---
-#        z = torch.tensor(
-#            [atomic_numbers[atom.symbol] for atom in calc_atoms], 
-#            dtype=torch.long, 
-#            device=self.device
-#        )
         z = torch.tensor(
-            calc_atoms.get_atomic_numbers(),
-            dtype=torch.long,
+            [atomic_numbers[atom.symbol] for atom in calc_atoms], 
+            dtype=torch.long, 
             device=self.device
         )
         pos = torch.tensor(
-            calc_atoms.get_positions(wrap=True), 
+            calc_atoms.get_positions(wrap = True), 
             dtype=self.precision, 
             device=self.device, 
             requires_grad=(self.config.compute_forces)  
         )
        
         # Cell should only be provided if the system is periodic
-#        cell = torch.tensor(
-#            calc_atoms.get_cell(complete=True), 
-#            dtype=self.precision, 
-#            device=self.device
-#        ) if calc_atoms.pbc.any() else None
-        
         cell = torch.tensor(
-            np.array(calc_atoms.get_cell(complete=True)),
-            dtype=self.precision,
+            calc_atoms.get_cell(complete=True), 
+            dtype=self.precision, 
             device=self.device
         ) if calc_atoms.pbc.any() else None
-
+        
         natoms = torch.tensor(
             [len(calc_atoms)], 
             dtype=torch.int64, 
