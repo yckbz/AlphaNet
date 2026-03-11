@@ -4,6 +4,7 @@ import numpy as np
 from tqdm import tqdm
 import torch
 from sklearn.utils import shuffle
+from sklearn.model_selection import train_test_split
 import joblib
 from torch_geometric.data import Data, DataLoader, InMemoryDataset, download_url, extract_zip
 
@@ -26,7 +27,7 @@ def get_pic_datasets(root, name, config):
             test_dataset = test_dataset[test_indices]
     else:
       
-        dataset = CustomPickleDataset(name=name, root=root)
+        dataset = CustomPickleDataset(name=name, root=root, config=config)
 
  
         split_idx = dataset.get_idx_split(len(dataset.data.y), train_size=config.train_size, valid_size=config.valid_size, test_size=config.test_size, seed=config.seed)
@@ -120,7 +121,8 @@ class CustomPickleDataset(InMemoryDataset):
         print('Saving...')
         torch.save((data, slices), self.processed_paths[0])
 
-    def get_idx_split(self, data_size, train_size=None, valid_size=None, seed=None):
+    #def get_idx_split(self, data_size, train_size=None, valid_size=None, seed=None):
+    def get_idx_split(self, data_size, train_size=None, valid_size=None, test_size=None, seed=None):
       ids = shuffle(list(range(data_size)))
       if train_size is not None and valid_size is None:
           train_idx = ids[:train_size]

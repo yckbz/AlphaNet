@@ -64,8 +64,19 @@ class Evaluator:
                 s=20
             )
 
-        min_energy = targets_energy.min().cpu().numpy()
-        max_energy = targets_energy.max().cpu().numpy()
+        #min_energy = targets_energy.min().cpu().numpy()
+        #max_energy = targets_energy.max().cpu().numpy()
+        #plt.plot([min_energy, max_energy], [min_energy, max_energy], 'k--', lw=2, label='Ideal')
+        # 修复：防止测试集为空时，targets_energy 也没有元素导致 min() 报错
+
+        if targets_energy.numel() > 0:
+            min_energy = targets_energy.min().cpu().numpy()
+            max_energy = targets_energy.max().cpu().numpy()
+        else:
+            # 如果最后一个数据集（Test）为空，则获取前面画好的图表的坐标轴范围
+            xmin, xmax = plt.xlim()
+            min_energy, max_energy = xmin, xmax
+            
         plt.plot([min_energy, max_energy], [min_energy, max_energy], 'k--', lw=2, label='Ideal')
         plt.xlabel('True Energy per Atom', fontsize=17)
         plt.ylabel('Predicted Energy per Atom', fontsize=17)
@@ -113,8 +124,8 @@ class Evaluator:
             mask = deviation < threshold
             preds_force_filtered = preds_force[mask]
             targets_force_filtered = targets_force[mask]
-            force_mae_filtered = 0.5*torch.mean(torch.abs(preds_force_filtered - targets_force_filtered)).item()
-            force_rmse_filtered = 0.5*torch.sqrt(torch.mean((preds_force_filtered - targets_force_filtered) ** 2)).item()
+            force_mae_filtered = torch.mean(torch.abs(preds_force_filtered - targets_force_filtered)).item()
+            force_rmse_filtered =torch.sqrt(torch.mean((preds_force_filtered - targets_force_filtered) ** 2)).item()
 
             plt.scatter(
                 targets_force_filtered.cpu().numpy(),
@@ -125,10 +136,20 @@ class Evaluator:
                 s=20
             )
 
-        min_force = targets_force.min().cpu().numpy()
-        max_force = targets_force.max().cpu().numpy()
-        plt.plot([min_force, max_force], [min_force, max_force], 'k--', lw=2, label='Ideal')
+        #min_force = targets_force.min().cpu().numpy()
+        #max_force = targets_force.max().cpu().numpy()
+        #plt.plot([min_force, max_force], [min_force, max_force], 'k--', lw=2, label='Ideal')
+        # 修复：防止测试集为空时，targets_force 也没有元素导致 min() 报错
 
+        if targets_force.numel() > 0:
+            min_force = targets_force.min().cpu().numpy()
+            max_force = targets_force.max().cpu().numpy()
+        else:
+            # 如果最后一个数据集（Test）为空，则获取前面画好的图表的坐标轴范围
+            xmin, xmax = plt.xlim()
+            min_force, max_force = xmin, xmax
+            
+        plt.plot([min_force, max_force], [min_force, max_force], 'k--', lw=2, label='Ideal')
         plt.xlabel('True Force', fontsize=17)
         plt.ylabel('Predicted Force', fontsize=17)
         plt.title('Force Parity Plot', fontsize=19)
