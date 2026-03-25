@@ -7,6 +7,7 @@ torch_geometric
 lightning
 tensorboard
 pyyaml
+click
 
 # LES long-range plugin — vendored in third_party/, install once after cloning:
 #   pip install -e third_party/
