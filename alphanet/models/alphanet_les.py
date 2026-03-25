@@ -13,6 +13,8 @@ No charge labels are required; latent charges are learned end-to-end from energy
 """
 
 import math
+import pathlib
+import sys
 from math import pi
 from typing import List, Optional, Tuple
 
@@ -29,6 +31,13 @@ from alphanet.models.alphanet import (
     scatter,
 )
 from alphanet.models.graph import GraphData
+
+# Make the vendored LES library (third_party/) importable as a fallback.
+# If `les` is already installed via pip, that version takes priority (append).
+_third_party = pathlib.Path(__file__).resolve().parents[3] / "third_party"
+if _third_party.is_dir() and str(_third_party) not in sys.path:
+    sys.path.append(str(_third_party))
+
 from les import Les
 
 
