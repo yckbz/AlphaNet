@@ -8,9 +8,8 @@ lightning
 tensorboard
 pyyaml
 
-# LES long-range plugin — install from local source or GitHub:
-#   pip install -e /path/to/les-main
-#   pip install git+https://github.com/ChengUCB/les.git
+# LES long-range plugin — vendored in third_party/, install once after cloning:
+#   pip install -e third_party/
 
 --find-links https://data.pyg.org/whl/torch-2.1.2+cu121.html
 torch_scatter
