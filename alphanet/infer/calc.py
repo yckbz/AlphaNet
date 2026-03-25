@@ -4,6 +4,9 @@ from ase.calculators.calculator import Calculator, all_changes
 from alphanet.models.graph import build_neighbor_topology, graph_from_neighbor_topology
 from alphanet.models.model import AlphaNetWrapper
 
+# Enable TF32 on Ampere+ GPUs for faster matmul with negligible precision loss.
+torch.set_float32_matmul_precision('high')
+
 class AlphaNetCalculator(Calculator):
     """
     ASE Calculator for AlphaNet models.
