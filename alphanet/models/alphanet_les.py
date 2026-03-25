@@ -1,17 +1,3 @@
-"""AlphaNetLES: AlphaNet extended with LES (Latent Ewald Summation) for long-range interactions.
-
-Architecture (inspired by MACE-LES integration):
-    E_total = E_short (AlphaNet short-range) + E_lr (LES Ewald long-range)
-
-After the message-passing loop, scalar features s and quantum state share the same
-representation and are routed into two separate readout heads:
-    1. Original readout head  -> per-atom short-range energy -> E_short
-    2. New LES readout head   -> latent charges -> Ewald summation -> E_lr
-
-Forces and stress are obtained by autograd on E_total, gradients flow through both paths.
-No charge labels are required; latent charges are learned end-to-end from energy/force supervision.
-"""
-
 import math
 import pathlib
 import sys
@@ -241,7 +227,6 @@ class AlphaNetLES(nn.Module):
         self.last_layer = nn.Linear(config.hidden_channels, self.num_targets)
         self.last_layer_quantum = nn.Linear(self.chi1 * 2, self.num_targets)
 
-        # ── LES-specific components ───────────────────────────────────────────────
         self.use_quantum_for_charges = les_config.use_quantum_for_charges
 
         # LES readout input dim: s alone, or s concatenated with quantum real/imag.
