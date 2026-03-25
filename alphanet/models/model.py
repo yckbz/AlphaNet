@@ -10,10 +10,26 @@ from alphanet.config import AlphaConfig
 class AlphaNetWrapper(torch.nn.Module):
     def __init__(
         self,
-        config: AlphaConfig
+        config: AlphaConfig,
+        les_config=None,
     ):
         super(AlphaNetWrapper, self).__init__()
-        self.model = AlphaNet(config)
+
+        # 根据配置选择实例化 AlphaNet 或 AlphaNetLES
+        use_les = getattr(config, "use_les", False) or (
+            les_config is not None and getattr(les_config, "use_les", False)
+        )
+
+        if use_les:
+            from alphanet.models.alphanet_les import AlphaNetLES
+            from alphanet.config import LESConfig
+
+            if les_config is None:
+                les_config = LESConfig()
+            self.model = AlphaNetLES(config, les_config)
+        else:
+            self.model = AlphaNet(config)
+
         self.cutoff = config.cutoff
         self.compute_forces = config.compute_forces
         self.compute_stress = config.compute_stress

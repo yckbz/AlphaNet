@@ -6,7 +6,11 @@ torch==2.1.2
 torch_geometric
 lightning
 tensorboard
+pyyaml
 
---find-links https://pytorch-geometric.com/whl/torch-2.1.2%2Bcu121.html
+# LES long-range plugin — install from local source or GitHub:
+#   pip install -e /path/to/les-main
+#   pip install git+https://github.com/ChengUCB/les.git
+
+--find-links https://data.pyg.org/whl/torch-2.1.2+cu121.html
 torch_scatter
-

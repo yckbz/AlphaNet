@@ -101,21 +101,41 @@ class AlphaConfig(BaseSettings):
     
 
         
+class LESConfig(BaseSettings):
+    """Configuration for the LES (Latent Ewald Summation) long-range interaction module.
+
+    Pass as a top-level "les" key in the JSON config file, e.g.:
+        { "les": { "use_les": true, "sigma": 1.0, "dl": 2.0 } }
+    """
+    use_les: bool = False
+    n_latent_charges: int = 1              # Number of latent charge channels per atom (n_q).
+    les_readout_hidden: list = [64, 32]    # Hidden layer widths of the LES readout MLP.
+    use_quantum_for_charges: bool = True   # Use both s and quantum state to predict latent charges.
+    output_scaling_factor: float = 0.1    # Output scale for latent charges; keeps LES contribution small at init.
+    # Ewald summation parameters
+    sigma: float = 1.0                     # Gaussian width (Å) controlling real/reciprocal space splitting.
+    dl: float = 2.0                        # Reciprocal-space grid spacing (Å); smaller = more k-points = more accurate.
+    remove_self_interaction: bool = True   # Remove self-interaction term (recommended).
+
+
 class All_Config:
-    def __init__(self, data=None, model=None, train=None):
-       
+    def __init__(self, data=None, model=None, train=None, les=None):
+
         self.data = DataConfig(**data) if data else DataConfig()
         self.model = AlphaConfig(**model) if model else AlphaConfig()
         self.train = TrainConfig(**train) if train else TrainConfig()
+        self.les = LESConfig(**les) if les else LESConfig()
 
     def __getattr__(self, name):
-        
+
         if hasattr(self.train, name):
             return getattr(self.train, name)
         elif hasattr(self.data, name):
             return getattr(self.data, name)
         elif hasattr(self.model, name):
             return getattr(self.model, name)
+        elif hasattr(self.les, name):
+            return getattr(self.les, name)
         else:
             raise AttributeError(f"'{self.__class__.__name__}' has no atrribute '{name}'")
     @classmethod

@@ -70,39 +70,38 @@ class Trainer(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
        batch_data = batch
-       batch_data.pos.requires_grad = True 
+       batch_data.pos.requires_grad = True
        if self.config.model.use_pbc:
           model_outputs = self.model(batch_data.pos, batch_data.z, batch_data.batch, batch_data.natoms, batch_data.cell, "train")
        else:
             model_outputs = self.model(batch_data.pos, batch_data.z, batch_data.batch, batch_data.natoms, prefix =  "train")
-       
+
        e_loss, f_loss, s_loss = 0.0, 0.0, 0.0
-       
+
        energy = model_outputs[0]
-       #print(energy.shape,batch_data.y.shape)
 
        e_loss = self.energy_loss(energy, batch_data.y)
        if self.config.compute_forces:
            forces = model_outputs[1]
-           
            f_loss = self.force_loss(forces, batch_data.force)
        if self.config.compute_stress:
            stress = model_outputs[2]
            s_loss = self.stress_loss(stress, reshape_stress_tensor(batch_data.stress).to(batch_data.pos.device))
 
-       loss = (self.config.train.energy_coef * e_loss + 
-               self.config.train.force_coef * f_loss + 
+       loss = (self.config.train.energy_coef * e_loss +
+               self.config.train.force_coef * f_loss +
                self.config.train.stress_coef * s_loss)
-       self.log('train_loss', loss, prog_bar=True)
-       
-       self.log('train_energy_loss', e_loss, prog_bar=True)
-       
+       # Pass batch_size explicitly: Lightning cannot reliably infer it from a
+       # PyG DataBatch because iterating the batch yields individual Data objects
+       # whose tensors have mismatched shape[0] (n_atoms vs 1 for energy labels).
+       n_graphs = batch_data.num_graphs
+       self.log('train_loss', loss, prog_bar=True, batch_size=n_graphs)
+       self.log('train_energy_loss', e_loss, prog_bar=True, batch_size=n_graphs)
        if self.config.compute_forces:
-           self.log('train_force_loss', f_loss, prog_bar=True)
-       
+           self.log('train_force_loss', f_loss, prog_bar=True, batch_size=n_graphs)
        if self.config.compute_stress:
-           self.log('train_stress_loss', s_loss, prog_bar=True)
-   
+           self.log('train_stress_loss', s_loss, prog_bar=True, batch_size=n_graphs)
+
        return loss
 
 
@@ -110,15 +109,13 @@ class Trainer(pl.LightningModule):
        with torch.enable_grad():
         batch_data = batch
         batch_data.pos.requires_grad = True
-        #print(batch_data.pos.shape, batch_data.z.shape)
         if self.config.model.use_pbc:
           model_outputs =  self.model(batch_data.pos, batch_data.z, batch_data.batch, batch_data.natoms, batch_data.cell, "infer")
         else:
             model_outputs = self.model(batch_data.pos, batch_data.z, batch_data.batch, batch_data.natoms, prefix ="infer")
         e_loss, f_loss, s_loss = 0.0, 0.0, 0.0
-        
+
         energy = model_outputs[0]
-        #print(energy.shape,batch_data.y.shape)
         e_loss = self.energy_loss(energy, batch_data.y)
         if self.config.compute_forces:
             forces = model_outputs[1]
@@ -126,20 +123,18 @@ class Trainer(pl.LightningModule):
         if self.config.compute_stress:
             stress = model_outputs[2]
             s_loss = self.stress_loss(stress, reshape_stress_tensor(batch_data.stress).to(batch_data.pos.device))
- 
-        loss = (self.config.train.energy_coef * e_loss + 
-                self.config.train.force_coef * f_loss + 
+
+        loss = (self.config.train.energy_coef * e_loss +
+                self.config.train.force_coef * f_loss +
                 self.config.train.stress_coef * s_loss)
-        self.log('val_loss', loss, prog_bar=True)
-        
-        self.log('val_energy_loss', e_loss, prog_bar=True)
-        
+        n_graphs = batch_data.num_graphs
+        self.log('val_loss', loss, prog_bar=True, batch_size=n_graphs)
+        self.log('val_energy_loss', e_loss, prog_bar=True, batch_size=n_graphs)
         if self.config.compute_forces:
-            self.log('val_force_loss', f_loss, prog_bar=True)
-        
+            self.log('val_force_loss', f_loss, prog_bar=True, batch_size=n_graphs)
         if self.config.compute_stress:
-            self.log('val_stress_loss', s_loss, prog_bar=True)
-    
+            self.log('val_stress_loss', s_loss, prog_bar=True, batch_size=n_graphs)
+
         return loss
 
     def test_step(self, batch, batch_idx):
@@ -151,7 +146,7 @@ class Trainer(pl.LightningModule):
         else:
             model_outputs =  self.model(batch_data.pos, batch_data.z, batch_data.batch, batch_data.natoms, prefix = "infer")
         e_loss, f_loss, s_loss = 0.0, 0.0, 0.0
-        
+
         energy = model_outputs[0]
         e_loss = self.energy_loss(energy.squeeze(), batch_data.y)
         if self.config.compute_forces:
@@ -160,20 +155,18 @@ class Trainer(pl.LightningModule):
         if self.config.compute_stress:
             stress = model_outputs[2]
             s_loss = self.stress_loss(stress, batch_data.stress)
- 
-        loss = (self.config.train.energy_coef * e_loss + 
-                self.config.train.force_coef * f_loss + 
+
+        loss = (self.config.train.energy_coef * e_loss +
+                self.config.train.force_coef * f_loss +
                 self.config.train.stress_coef * s_loss)
-        self.log('val_loss', loss, prog_bar=True)
-        
-        self.log('val_energy_loss', e_loss, prog_bar=True)
-        
+        n_graphs = batch_data.num_graphs
+        self.log('val_loss', loss, prog_bar=True, batch_size=n_graphs)
+        self.log('val_energy_loss', e_loss, prog_bar=True, batch_size=n_graphs)
         if self.config.compute_forces:
-            self.log('val_force_loss', f_loss, prog_bar=True)
-        
+            self.log('val_force_loss', f_loss, prog_bar=True, batch_size=n_graphs)
         if self.config.compute_stress:
-            self.log('val_stress_loss', s_loss, prog_bar=True)
-    
+            self.log('val_stress_loss', s_loss, prog_bar=True, batch_size=n_graphs)
+
         return loss
 
     def configure_optimizers(self):

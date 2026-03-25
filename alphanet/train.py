@@ -5,6 +5,12 @@ from alphanet.data import get_pic_datasets
 from alphanet.models.model import AlphaNetWrapper
 from alphanet.mul_trainer import Trainer
 
+# Enable TF32 on Ampere+ GPUs (A100/A800/RTX30xx/RTX40xx) for faster matmul.
+# TF32 has 10-bit mantissa vs float32's 23-bit, but the error is far smaller
+# than DFT noise (~meV), so there is no practical impact on model accuracy.
+torch.set_float32_matmul_precision('high')
+
+
 def run_training(config1, runtime_config):
 
     train_dataset, valid_dataset, test_dataset = get_pic_datasets(
@@ -22,7 +28,8 @@ def run_training(config1, runtime_config):
     config1.a = force_std
     config1.b = energy_peratom
 
-    model = AlphaNetWrapper(config1)
+    les_config = getattr(config1, "les", None)
+    model = AlphaNetWrapper(config1.model, les_config=les_config)
     
     if config1.dtype == "64":
         model = model.double()

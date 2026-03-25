@@ -38,14 +38,19 @@ class AlphaNetCalculator(Calculator):
             **kwargs: Additional arguments for the base ASE Calculator.
         """
         Calculator.__init__(self, **kwargs)
-        
+
         # --- Model Loading ---
         if precision == "64":
            config.dtype = '64'
+
+        # 获取 LES 配置（若 config 是 All_Config 则有 les 属性）
+        les_config = getattr(config, "les", None)
+        model_config = getattr(config, "model", config)
+
         if ckpt_path.endswith('ckpt'):
-          self.model = AlphaNetWrapper(config).to(torch.device(device))
+          self.model = AlphaNetWrapper(model_config, les_config=les_config).to(torch.device(device))
           # Load state dict, ignoring mismatches if any
-          self.model.load_state_dict(torch.load(ckpt_path, map_location=torch.device(device)), strict=False)        
+          self.model.load_state_dict(torch.load(ckpt_path, map_location=torch.device(device)), strict=False)
         elif ckpt_path.endswith('pt'):
            self.model = torch.load(ckpt_path, map_location=torch.device(device))
         else:
