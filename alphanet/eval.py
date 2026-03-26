@@ -142,6 +142,32 @@ def run_analysis(evaluator: Evaluator, loaders: dict, output_dir: str, quiet: bo
     
     # Ensure output directory exists
     Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    split_sizes = {
+        "Train": len(loaders["train"].dataset),
+        "Validation": len(loaders["valid"].dataset),
+        "Test": len(loaders["test"].dataset),
+    }
+
+    split_table = Table(title="Evaluation Splits", show_header=False, box=None)
+    split_table.add_column("Split", style="dim")
+    split_table.add_column("Samples")
+    for split_name, split_size in split_sizes.items():
+        split_table.add_row(split_name, str(split_size))
+    console.print(Panel.fit(split_table, border_style="dim"))
+
+    if all(size == 0 for size in split_sizes.values()):
+        raise RuntimeError(
+            "All evaluation splits are empty. Check train_size/valid_size/test_size or dataset configuration."
+        )
+
+    empty_splits = [name for name, size in split_sizes.items() if size == 0]
+    if empty_splits:
+        console.print(
+            "[yellow]Warning:[/] Empty evaluation splits detected: "
+            + ", ".join(empty_splits)
+            + ". They will be skipped in parity plots."
+        )
     
     console.log(f"Starting analysis: [cyan]{output_dir}[/]")
     
