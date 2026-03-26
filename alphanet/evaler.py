@@ -14,9 +14,10 @@ class Evaluator:
         
 
     def load_model(self, model_path):
-        self.model = AlphaNetWrapper(self.config.model)
+        les_config = getattr(self.config, 'les', None)
+        self.model = AlphaNetWrapper(self.config.model, les_config=les_config)
         checkpoint = torch.load(model_path)
-        
+
         self.model.load_state_dict(checkpoint)
 
     @staticmethod

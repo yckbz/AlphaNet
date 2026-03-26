@@ -90,6 +90,7 @@ class AlphaConfig(BaseSettings):
     has_norm_after_flag: bool = False
     reduce_mode: str = "sum"
     zbl: bool = False
+    use_les: bool = False
     zbl_w: Optional[list] = [0.187,0.3769,0.189,0.081,0.003,0.037,0.0546,0.0715]
     zbl_b: Optional[list] = [3.20,1.10,0.102,0.958,1.28,1.14,1.69,5]
     zbl_gamma: float = 1.001
