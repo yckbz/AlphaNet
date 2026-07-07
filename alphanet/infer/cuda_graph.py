@@ -131,6 +131,14 @@ class CapturedStep:
         self.topology_ref = topology
         return True
 
+    def refresh_z(self, z: torch.Tensor) -> None:
+        """Refresh the static atomic-number buffer read by the captured
+        kernels: species can change while the atom count stays the same
+        (composition screening, MC swaps), which rebuilds the topology but
+        does not trigger a recapture."""
+        with torch.no_grad():
+            self._z.copy_(z)
+
     def _load_inputs(self, positions: np.ndarray, cell: np.ndarray):
         self._pos_host.copy_(torch.from_numpy(np.ascontiguousarray(positions)))
         self._cell_host.copy_(torch.from_numpy(np.ascontiguousarray(cell)))

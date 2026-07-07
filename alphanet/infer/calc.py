@@ -108,6 +108,11 @@ class AlphaNetCalculator(Calculator):
         self._graph_auto = use_cuda_graph is None
         use_graph = True if use_cuda_graph is None else bool(use_cuda_graph)
         self.use_cuda_graph = use_graph and self.device.type == "cuda"
+        if (self.use_cuda_graph and not self._graph_auto
+                and getattr(config, "reduce_mode", "sum") != "sum"):
+            warnings.warn(
+                "use_cuda_graph=True ignored: the static-shape (masked) mode "
+                "is only exact for reduce_mode='sum'; using the eager path.")
         self._captured_step = None
         self._graph_disabled = False
         self._graph_choice = {}  # (n_atoms, with_stress) -> bool (auto mode)
@@ -172,7 +177,10 @@ class AlphaNetCalculator(Calculator):
         """Return a ready CapturedStep for this topology/request, or None to
         use the eager path. Handles (re)capture, cheap topology refresh and
         (in auto mode) the one-off replay-vs-eager timing decision."""
-        if not self.use_cuda_graph or self._graph_disabled or self.skin <= 0.0:
+        if (not self.use_cuda_graph or self._graph_disabled or self.skin <= 0.0
+                or getattr(self.config, "reduce_mode", "sum") != "sum"):
+            # Masked static shapes zero out-of-cutoff messages, which is only
+            # equivalent to hard edge filtering under sum aggregation.
             return None
         # needs_stress already reflects the sticky policy applied in
         # calculate(); a capture therefore keeps serving the whole E/F/S
@@ -248,6 +256,7 @@ class AlphaNetCalculator(Calculator):
                 )
                 self._captured_step = step
                 self._graph_stats["captures"] += 1
+        step.refresh_z(z)
         return step
 
     def _eager_runner(self, topology, z, natoms, batch, want_stress,
