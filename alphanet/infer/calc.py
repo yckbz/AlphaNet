@@ -95,24 +95,40 @@ class AlphaNetCalculator(Calculator):
             return calc_atoms
         return self.atoms
 
-    def _max_displacement_since_rebuild(self, positions, cell, pbc):
+    def _pair_distance_change_bound(self, positions, cell, pbc):
+        """Conservative upper bound on how much any pair distance can have
+        changed since the cached neighbor list was built, including cell
+        deformation (NPT / variable-cell optimization).
+
+        With f/s the current/reference fractional coordinates, C/C_ref the
+        current/reference cells and S the cached integer offsets, any pair
+        vector change decomposes as
+            dv = [(f_j - s_j) - (f_i - s_i)] @ C + (s_j + S - s_i) @ (C - C_ref)
+        so ||dv|| <= 2 * max_i ||aligned_i - s_i @ C||
+                    + (cutoff + skin) * ||inv(C_ref)||_2 * ||C - C_ref||_2,
+        where the second term uses ||v_ref|| <= cutoff + skin for every cached
+        pair (and monotonicity in ||v_ref|| for excluded pairs). The cached
+        list stays valid while this bound does not exceed the skin.
+        """
         if self._reference_positions is None or self._reference_cell is None:
             return float("inf")
-        aligned_positions = self._align_positions_to_reference(positions, cell, pbc)
-        delta_cart = aligned_positions - self._reference_positions
-        distances = np.linalg.norm(delta_cart, axis=1)
-        return float(np.max(distances)) if distances.size else 0.0
+        aligned = self._align_positions_to_reference(positions, cell, pbc)
+        reference_frac = self._reference_positions @ np.linalg.inv(self._reference_cell)
+        internal = aligned - reference_frac @ cell
+        internal_max = float(np.max(np.linalg.norm(internal, axis=1))) if len(internal) else 0.0
+        cell_delta = float(np.linalg.norm(cell - self._reference_cell, ord=2))
+        inv_ref_norm = float(np.linalg.norm(np.linalg.inv(self._reference_cell), ord=2))
+        radius = float(self.config.cutoff) + self.skin
+        return 2.0 * internal_max + radius * inv_ref_norm * cell_delta
 
     def _align_positions_to_reference(self, positions, cell, pbc):
-        if (
-            self._reference_positions is None
-            or self._reference_cell is None
-            or not np.allclose(cell, self._reference_cell, atol=1e-12, rtol=0.0)
-        ):
+        """Map each atom onto the periodic image closest to its reference
+        position. Fractional coordinates are taken in each configuration's own
+        cell, so the mapping remains exact under cell deformation (NPT)."""
+        if self._reference_positions is None or self._reference_cell is None:
             return positions.copy()
-        inverse_cell = np.linalg.inv(cell)
-        current_frac = positions @ inverse_cell
-        reference_frac = self._reference_positions @ inverse_cell
+        current_frac = positions @ np.linalg.inv(cell)
+        reference_frac = self._reference_positions @ np.linalg.inv(self._reference_cell)
         delta_frac = current_frac - reference_frac
         periodic_axes = np.asarray(pbc, dtype=bool)
         delta_frac[:, periodic_axes] -= np.round(delta_frac[:, periodic_axes])
@@ -129,9 +145,9 @@ class AlphaNetCalculator(Calculator):
             return True
         if self._reference_pbc is None or not np.array_equal(np.asarray(pbc, dtype=bool), self._reference_pbc):
             return True
-        if self._reference_cell is None or not np.allclose(cell, self._reference_cell, atol=1e-12, rtol=0.0):
+        if self._reference_cell is None:
             return True
-        return self._max_displacement_since_rebuild(positions, cell, pbc) > (0.5 * self.skin)
+        return self._pair_distance_change_bound(positions, cell, pbc) > self.skin
 
     def _build_or_reuse_topology(self, positions, cell_array, numbers, pbc, pos, natoms):
         if self._should_rebuild_topology(positions, cell_array, numbers, pbc):
@@ -182,11 +198,14 @@ class AlphaNetCalculator(Calculator):
         batch = torch.zeros_like(z).to(self.device)
 
         # --- Run Model Inference ---
+        # The stress path also uses the cached topology: the symmetric
+        # displacement is injected in graph_from_neighbor_topology, so
+        # NPT / variable-cell runs no longer rebuild the neighbor list
+        # from scratch on every step.
         use_neighbor_cache = (
             self.reuse_neighbors
             and self.supports_neighbor_cache
             and calc_atoms.pbc.any()
-            and not needs_stress
         )
         positions_for_model = wrapped_positions
         if use_neighbor_cache:
@@ -225,12 +244,13 @@ class AlphaNetCalculator(Calculator):
                     cell=cell,
                     cutoff=self.config.cutoff,
                     dtype=self.precision,
+                    compute_stress=needs_stress,
                 )
                 energy, forces, stress = self.model.forward_graph(
                     graph_data,
                     prefix="infer",
                     compute_forces=needs_forces,
-                    compute_stress=False,
+                    compute_stress=needs_stress,
                 )
             else:
                 energy, forces, stress = self.model(

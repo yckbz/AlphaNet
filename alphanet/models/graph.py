@@ -208,11 +208,23 @@ def graph_from_neighbor_topology(
     displacement: Optional[Tensor] = None,
     cutoff: Optional[float] = None,
     dtype: torch.dtype = torch.float32,
+    compute_stress: bool = False,
 ) -> GraphData:
     precision = dtype
     pos = pos.to(precision)
     z = z.long()
     cell = check_and_reshape_cell(cell)
+    if compute_stress and displacement is None:
+        # Inject the symmetric-displacement trick on top of the cached
+        # topology: the displacement tensor is numerically zero, so positions,
+        # cell and hence the cached neighbor list are unchanged; the edge
+        # geometry below is recomputed from the displaced pos/cell and is
+        # therefore differentiable w.r.t. the displacement (stress via
+        # autograd), exactly as in process_positions_and_edges.
+        pos, cell, displacement = get_symmetric_displacement(
+            pos, cell, num_graphs=int(natoms.numel()), batch=batch
+        )
+        cell = check_and_reshape_cell(cell)
     edge_index, cell_offsets, dist, vecs = _update_edge_geometry(
         pos=pos,
         batch=batch,
