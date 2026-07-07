@@ -31,6 +31,7 @@ class AlphaNetCalculator(Calculator):
         skin=0.5,
         use_cuda_graph=None,
         sticky_stress=True,
+        use_fused_ops=None,
         **kwargs,
     ):
         """
@@ -59,6 +60,10 @@ class AlphaNetCalculator(Calculator):
                 step costs one forward+backward instead of ~2.5. Pure-MD
                 runs that never ask for stress are unaffected. Call
                 reset_neighbor_cache() to clear the mode.
+            use_fused_ops (bool | None): Use the fused Triton kernels
+                (inference-only, fp32+CUDA). None (default) enables them
+                automatically when Triton and a CUDA device are available;
+                unsupported configurations silently use the reference path.
             **kwargs: Additional arguments for the base ASE Calculator.
         """
         Calculator.__init__(self, **kwargs)
@@ -114,6 +119,22 @@ class AlphaNetCalculator(Calculator):
         # forward+backward per step. reset_neighbor_cache() clears it.
         self.sticky_stress = bool(sticky_stress)
         self._stress_sticky = False
+
+        # --- fused Triton ops (inference-only, fp32+CUDA) ---
+        if use_fused_ops is None:
+            try:
+                from alphanet import ops as _ops
+                use_fused_ops = (_ops.is_available()
+                                 and self.device.type == "cuda"
+                                 and self.precision == torch.float32)
+            except Exception:
+                use_fused_ops = False
+        inner_model = getattr(self.model, "model", None)
+        if inner_model is not None:
+            inner_model.use_fused_ops = bool(use_fused_ops)
+            for message_layer in getattr(inner_model, "message_layers", []):
+                message_layer.use_fused_ops = bool(use_fused_ops)
+        self.use_fused_ops = bool(use_fused_ops)
 
     @property
     def neighbor_cache_stats(self):

@@ -10,6 +10,13 @@ from torch_geometric.nn.conv import MessagePassing
 from alphanet.models.graph import GraphData
 import numpy as np
 
+try:  # fused Triton ops (phase 3); reference path remains the fallback
+    from alphanet import ops as _fused_ops
+    if not _fused_ops.is_available():
+        _fused_ops = None
+except Exception:
+    _fused_ops = None
+
 
 def scatter(src: torch.Tensor, index: torch.Tensor, dim: int = -1, 
             out: Optional[torch.Tensor] = None, dim_size: Optional[int] = None, 
@@ -244,16 +251,26 @@ class EquiMessagePassing(MessagePassing):
         rbfh = self.rbf_proj(edge_rbf)
         weight = self.dir_proj(weight)
         rbfh = rbfh * weight
-        
-        dx, dvec = self.propagate(
-            edge_index,
-            xh=xh,
-            vec=vec,
-            rbfh_ij=rbfh,
-            r_ij=edge_vector,
-            edge_mask=edge_mask,
-            size=None,
-        )
+
+        if (getattr(self, "use_fused_ops", False) and _fused_ops is not None
+                and not self.training and xh.is_cuda
+                and xh.dtype == torch.float32 and self.reduce_mode == "sum"):
+            # Fused message+aggregate (inference): per-edge MPS contraction,
+            # rank-1 dia, fc_mps, atan2 and the vector message all live in
+            # one kernel that accumulates straight into the node outputs —
+            # no [E,3H] gathers or [E,3,H] message tensors are materialized.
+            dx, dvec = _fused_ops.fused_equi_message(
+                self, xh, vec, rbfh, edge_vector, edge_index, edge_mask)
+        else:
+            dx, dvec = self.propagate(
+                edge_index,
+                xh=xh,
+                vec=vec,
+                rbfh_ij=rbfh,
+                r_ij=edge_vector,
+                edge_mask=edge_mask,
+                size=None,
+            )
         
         if self.has_norm_before_flag:
             dx = self.dx_layer_norm(dx)
@@ -400,6 +417,11 @@ class AlphaNet(nn.Module):
         self.compute_forces = config.compute_forces
         self.compute_stress = config.compute_stress
         
+        # Inference-only fused Triton kernels (fp32+CUDA). Off by default so
+        # training and TorchScript are untouched; AlphaNetCalculator enables
+        # it when the environment supports it.
+        self.use_fused_ops = False
+
         self.z_emb_ln = nn.LayerNorm(config.hidden_channels, elementwise_affine=False)
         self.z_emb = Embedding(95, config.hidden_channels)
         self.kernel1 = torch.nn.Parameter(torch.randn((config.hidden_channels, self.chi1 * 2), device=self.device))
@@ -538,22 +560,32 @@ class AlphaNet(nn.Module):
 
         S_i_j = self.S_vector(s, edge_diff.unsqueeze(-1), edge_index, radial_hidden)
         
-        # Scalarization via bmm: out[e,f,h] = sum_d edge_frame[e,d,f] * S[e,d,h].
-        # Math-equivalent to the broadcast+sum form but never materializes the
-        # [E,3,3,H] product tensor; the frame-axis-1 square is written without
-        # in-place aliasing (cleaner for autograd).
-        frame_t = edge_frame.transpose(1, 2)
-        scalrization1 = torch.bmm(frame_t, S_i_j[i])
-        scalrization2 = torch.bmm(frame_t, S_i_j[j])
-        s1_0, s1_1, s1_2 = scalrization1.unbind(dim=1)
-        scalrization1 = torch.stack((s1_0, s1_1 * s1_1, s1_2), dim=1)
-        s2_0, s2_1, s2_2 = scalrization2.unbind(dim=1)
-        scalrization2 = torch.stack((s2_0, s2_1 * s2_1, s2_2), dim=1)
-        
-        scalar3 = (self.lin(torch.permute(scalrization1, (0, 2, 1))) + 
-                  torch.permute(scalrization1, (0, 2, 1))[:, :, 0].unsqueeze(2)).squeeze(-1) / math.sqrt(self.hidden_channels)
-        scalar4 = (self.lin(torch.permute(scalrization2, (0, 2, 1))) + 
-                  torch.permute(scalrization2, (0, 2, 1))[:, :, 0].unsqueeze(2)).squeeze(-1) / math.sqrt(self.hidden_channels)
+        if (getattr(self, "use_fused_ops", False) and _fused_ops is not None
+                and not self.training
+                and edge_frame.is_cuda and edge_frame.dtype == torch.float32):
+            # Fused Triton kernel: frame projection + square + 3->H/4->1 MLP
+            # entirely in registers — eliminates the two [E,H,H/4] hidden
+            # blocks (the model's largest allocation) and their autograd
+            # copies. Math-identical to the reference block below.
+            scalar3, scalar4 = _fused_ops.fused_scalarization_mlp(
+                S_i_j, edge_frame, i, j, self.lin, self.hidden_channels)
+        else:
+            # Scalarization via bmm: out[e,f,h] = sum_d edge_frame[e,d,f] * S[e,d,h].
+            # Math-equivalent to the broadcast+sum form but never materializes the
+            # [E,3,3,H] product tensor; the frame-axis-1 square is written without
+            # in-place aliasing (cleaner for autograd).
+            frame_t = edge_frame.transpose(1, 2)
+            scalrization1 = torch.bmm(frame_t, S_i_j[i])
+            scalrization2 = torch.bmm(frame_t, S_i_j[j])
+            s1_0, s1_1, s1_2 = scalrization1.unbind(dim=1)
+            scalrization1 = torch.stack((s1_0, s1_1 * s1_1, s1_2), dim=1)
+            s2_0, s2_1, s2_2 = scalrization2.unbind(dim=1)
+            scalrization2 = torch.stack((s2_0, s2_1 * s2_1, s2_2), dim=1)
+
+            scalar3 = (self.lin(torch.permute(scalrization1, (0, 2, 1))) +
+                      torch.permute(scalrization1, (0, 2, 1))[:, :, 0].unsqueeze(2)).squeeze(-1) / math.sqrt(self.hidden_channels)
+            scalar4 = (self.lin(torch.permute(scalrization2, (0, 2, 1))) +
+                      torch.permute(scalrization2, (0, 2, 1))[:, :, 0].unsqueeze(2)).squeeze(-1) / math.sqrt(self.hidden_channels)
         
         edge_weight = torch.cat((scalar3, scalar4), dim=-1) * rbounds.unsqueeze(-1)
         edge_weight = torch.cat((edge_weight, radial_hidden, radial_emb), dim=-1)
